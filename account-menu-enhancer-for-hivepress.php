@@ -1,20 +1,19 @@
 <?php
 /**
  * Plugin Name: Account Menu Enhancer for HivePress
- * Description: Integrates HivePress user account menu with WooCommerce My Account menu, with custom menu items, visibility controls, and position management.
- * Version: 1.0
+ * Description: Integrates HivePress user account menu with WooCommerce My Account menu, supports custom menu items with per-menu targeting and position management, and allows hiding WooCommerce items — while preserving HivePress unread counters/badges in both menus.
+ * Version: 1.1.0
  * Author: Chris Bruce
- * Author URI: https://community.hivepress.io/u/chrisb/summary
- * Requires at least: 6.0
- * Tested up to: 6.8.2
- * Requires PHP: 8.0
+ * Requires at least: 5.0
+ * Tested up to: 6.6
+ * Requires PHP: 7.2
  * Text Domain: account-menu-enhancer-for-hivepress
  * Domain Path: /languages
  */
 
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
-define( 'AMEHP_VERSION', '1.3.0' );
+define( 'AMEHP_VERSION', '1.6.0' );
 define( 'AMEHP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AMEHP_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -41,6 +40,9 @@ class AMEHP_Account_Menu_Enhancer {
         add_action( 'admin_init', array( $this, 'register_settings' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 
+        // Front-end enhancement for WC: mirror HP counters (enqueue broadly; script self-checks)
+        add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_front_assets' ) );
+
         // Hook late to avoid stepping on core/plugin defaults.
         add_filter( 'hivepress/v1/menus/user_account', array( $this, 'filter_hivepress_menu' ), 999 );
         add_action( 'init', array( $this, 'attach_wc_hooks' ) );
@@ -53,8 +55,7 @@ class AMEHP_Account_Menu_Enhancer {
     }
 
     public function on_activate() {
-        if ( ! file_exists( AMEHP_PLUGIN_DIR . 'assets/css' ) ) { wp_mkdir_p( AMEHP_PLUGIN_DIR . 'assets/css' ); }
-        if ( ! file_exists( AMEHP_PLUGIN_DIR . 'assets/js' ) )  { wp_mkdir_p( AMEHP_PLUGIN_DIR . 'assets/js' ); }
+        // Reserved for future use.
     }
 
     public function attach_wc_hooks() {
@@ -173,7 +174,7 @@ class AMEHP_Account_Menu_Enhancer {
         echo '</select></p>';
 
         echo '<p class="amehp-url-field" ' . $show_url . '><label>' . esc_html__( 'URL:', 'account-menu-enhancer-for-hivepress' ) . '</label> ';
-        echo '<input type="text" name="amehp_settings[custom_menu_items][' . esc_attr( $index ) . '][url]" value="' . esc_attr( $url ) . '"></p>';
+        echo '<input type="text" class="amehp-url-input" name="amehp_settings[custom_menu_items][' . esc_attr( $index ) . '][url]" value="' . esc_attr( $url ) . '"></p>';
 
         echo '<p class="amehp-route-field" ' . $show_route . '><label>' . esc_html__( 'HivePress Route:', 'account-menu-enhancer-for-hivepress' ) . '</label> ';
         echo '<select name="amehp_settings[custom_menu_items][' . esc_attr( $index ) . '][route]" class="amehp-route-select">';
@@ -279,18 +280,110 @@ class AMEHP_Account_Menu_Enhancer {
         settings_fields( 'amehp_settings_group' );
         wp_nonce_field( 'amehp_settings_save', 'amehp_nonce' );
         do_settings_sections( 'amehp-settings' );
-        submit_button( __( 'Save Settings', 'account-menu-enhancer-for-hivepress' ) );
+        submit_button( __( 'Save Settings', 'account-menu-enhancer-for-hivepress' ), 'primary', 'amehp-save-settings' );
         echo '</form></div>';
     }
 
     public function enqueue_admin_assets( $hook ) {
         if ( $hook !== 'settings_page_amehp-settings' ) { return; }
-        wp_enqueue_style( 'amehp-admin-css', AMEHP_PLUGIN_URL . 'assets/css/admin.css', array(), AMEHP_VERSION );
-        wp_enqueue_script( 'amehp-admin-js', AMEHP_PLUGIN_URL . 'assets/js/admin.js', array( 'jquery' ), AMEHP_VERSION, true );
+
+        $css_url = file_exists( AMEHP_PLUGIN_DIR . 'admin.css' )
+            ? AMEHP_PLUGIN_URL . 'admin.css'
+            : AMEHP_PLUGIN_URL . 'assets/css/admin.css';
+
+        $js_url  = file_exists( AMEHP_PLUGIN_DIR . 'admin.js' )
+            ? AMEHP_PLUGIN_URL . 'admin.js'
+            : AMEHP_PLUGIN_URL . 'assets/js/admin.js';
+
+        wp_enqueue_style( 'amehp-admin-css', $css_url, array(), AMEHP_VERSION );
+        wp_enqueue_script( 'amehp-admin-js', $js_url, array( 'jquery' ), AMEHP_VERSION, true );
+    }
+
+    /* ---------------- Front-end: add HP-like badges into WC nav ---------------- */
+
+    public function enqueue_front_assets() {
+        if ( ! is_user_logged_in() ) { return; }
+
+        // Server-side fallback (may be empty if HP attaches badges only during render)
+        $badge_map = $this->get_hp_badge_map();
+
+        // CSS
+        $css_url = file_exists( AMEHP_PLUGIN_DIR . 'public.css' )
+            ? AMEHP_PLUGIN_URL . 'public.css'
+            : AMEHP_PLUGIN_URL . 'assets/css/public.css';
+        wp_enqueue_style( 'amehp-public-css', $css_url, array(), AMEHP_VERSION );
+
+        // JS
+        $js_url = file_exists( AMEHP_PLUGIN_DIR . 'public.js' )
+            ? AMEHP_PLUGIN_URL . 'public.js'
+            : AMEHP_PLUGIN_URL . 'assets/js/public.js';
+        wp_enqueue_script( 'amehp-public-js', $js_url, array(), AMEHP_VERSION, true );
+
+        // Pass fallback map to JS
+        wp_localize_script( 'amehp-public-js', 'AMEHP_DATA', array(
+            'badges' => $badge_map,
+        ) );
+    }
+
+    /**
+     * Server-side fallback: try to read HP badges from the menu definition.
+     * If HP attaches badges only during render, this may be empty — the JS will then rely on DOM scraping.
+     */
+    private function get_hp_badge_map() {
+        $map = array();
+
+        if ( ! class_exists( '\HivePress\Menus\User_Account' ) || ! function_exists( 'hivepress' ) ) {
+            return $map;
+        }
+
+        // Detach our filter so we get the native HP items
+        remove_filter( 'hivepress/v1/menus/user_account', array( $this, 'filter_hivepress_menu' ), 999 );
+        $hp  = new \HivePress\Menus\User_Account();
+        $raw = method_exists( $hp, 'get_items' ) ? $hp->get_items() : array();
+        add_filter( 'hivepress/v1/menus/user_account', array( $this, 'filter_hivepress_menu' ), 999 );
+
+        foreach ( (array) $raw as $key => $item ) {
+            $count_str = '';
+            $count_int = 0;
+
+            if ( isset( $item['badge'] ) ) {
+                $count_str = (string) $item['badge']; // could be "9+"
+                $count_int = (int) preg_replace( '/[^0-9]/', '', $count_str );
+            } elseif ( isset( $item['label'] ) && is_string( $item['label'] ) ) {
+                if ( preg_match( '/<(span|small)[^>]*class="[^"]*hp-badge[^"]*"[^>]*>\s*([0-9]+(?:\+?)?)\s*<\/\\1>/i', $item['label'], $m ) ) {
+                    $count_str = $m[2];
+                    $count_int = (int) preg_replace( '/[^0-9]/', '', $count_str );
+                }
+            }
+
+            if ( $count_int > 0 ) {
+                $label = isset( $item['label'] ) ? wp_strip_all_tags( $item['label'] ) : $key;
+                $url   = '';
+                if ( ! empty( $item['url'] ) ) {
+                    $url = $item['url'];
+                } elseif ( ! empty( $item['route'] ) && function_exists( 'hivepress' ) ) {
+                    $url = hivepress()->router->get_url( $item['route'] );
+                }
+
+                if ( $url ) {
+                    $map[ $key ] = array(
+                        'count' => ( $count_str !== '' ? $count_str : (string) $count_int ),
+                        'label' => $label,
+                        'url'   => $url,
+                    );
+                    if ( substr( $key, -5 ) === '_page' ) {
+                        $map[ substr( $key, 0, -5 ) ] = $map[ $key ];
+                    }
+                }
+            }
+        }
+
+        return $map;
     }
 
     /* ---------------- Core: Menu Filters ---------------- */
 
+    // Preserve HP items AS-IS to keep badges/counters in HivePress menu
     public function filter_hivepress_menu( $menu ) {
         if ( $this->running_hp_filter ) { return $menu; }
         $this->running_hp_filter = true;
@@ -304,19 +397,13 @@ class AMEHP_Account_Menu_Enhancer {
 
         if ( ! $integrate && ! $custom_only ) {
             $this->running_hp_filter = false;
-            return $menu; // leave native HP alone
+            return $menu; // native HP untouched
         }
 
-        // Base HP (raw, no filters)
-        $hp = $this->get_hp_base_items();
+        // Start with existing HP items so counters/badges remain
+        $result = $menu['items'];
 
-        // Seed with HP items (normalized)
-        $result = array();
-        foreach ( $hp as $key => $item ) {
-            $result[ $key ] = $item; // label, url, order
-        }
-
-        // Custom items for HP or both
+        // Add custom items targeted to HivePress or Both
         $customs = $this->get_custom_items();
         foreach ( $customs as $cid => $ci ) {
             $target = $this->normalize_target_value( isset( $ci['menu'] ) ? $ci['menu'] : 'both' );
@@ -325,9 +412,9 @@ class AMEHP_Account_Menu_Enhancer {
             $url = $this->resolve_custom_url( $ci );
             if ( $url === '' ) { continue; }
             $result[ 'custom-' . $cid ] = array(
-                'label' => $ci['label'],
-                'url'   => $url,
-                'order' => isset( $ci['position'] ) ? (int) $ci['position'] : 999,
+                'label'  => $ci['label'],
+                'url'    => $url,
+                '_order' => isset( $ci['position'] ) ? (int) $ci['position'] : 999,
             );
         }
 
@@ -339,14 +426,21 @@ class AMEHP_Account_Menu_Enhancer {
                 if ( in_array( $ep, $wc_hide, true ) ) { continue; }
                 if ( isset( $result[ $ep ] ) ) { continue; }
                 $result[ $ep ] = array(
-                    'label' => $label,
-                    'url'   => wc_get_account_endpoint_url( $ep ),
-                    'order' => 600,
+                    'label'  => $label,
+                    'url'    => wc_get_account_endpoint_url( $ep ),
+                    '_order' => 600,
                 );
             }
         }
 
-        uasort( $result, array( $this, 'cmp_order' ) );
+        // Sort by HivePress’ _order if present
+        uasort( $result, function( $a, $b ) {
+            $oa = isset( $a['_order'] ) ? (int) $a['_order'] : ( isset( $a['order'] ) ? (int) $a['order'] : 999 );
+            $ob = isset( $b['_order'] ) ? (int) $b['_order'] : ( isset( $b['order'] ) ? (int) $b['order'] : 999 );
+            if ( $oa === $ob ) { return 0; }
+            return ( $oa < $ob ) ? -1 : 1;
+        });
+
         $menu['items'] = $result;
 
         $this->running_hp_filter = false;
@@ -367,21 +461,21 @@ class AMEHP_Account_Menu_Enhancer {
             return $items; // native WC
         }
 
-        // Start from current WC, drop hidden, and drop any stray custom-* that arrived from elsewhere
+        // Start from current WC, drop hidden & stray custom-*
         $merged = array();
         foreach ( (array) $items as $ep => $label ) {
             if ( in_array( $ep, $wc_hide, true ) ) { continue; }
-            if ( strpos( $ep, 'custom-' ) === 0 ) { continue; } // scrub
+            if ( strpos( $ep, 'custom-' ) === 0 ) { continue; }
             $merged[ $ep ] = array( 'label' => $label, 'position' => 500 );
         }
 
-        // Merge HP natives only if Integration ON (raw HP only, no customs)
+        // Merge HP natives only if Integration ON (raw HP baseline)
         if ( $integrate && class_exists( '\HivePress\Menus\User_Account' ) && function_exists( 'hivepress' ) ) {
             $hp = $this->get_hp_base_items();
             $hp_pos = 100;
             foreach ( $hp as $key => $item ) {
                 if ( isset( $merged[ $key ] ) ) { continue; }
-                $label = isset( $item['label'] ) ? $item['label'] : $key;
+                $label = isset( $item['label'] ) ? wp_strip_all_tags( $item['label'] ) : $key;
                 $merged[ $key ] = array(
                     'label'    => $label,
                     'position' => ( isset( $item['order'] ) ? (int) $item['order'] : $hp_pos ),
@@ -395,7 +489,7 @@ class AMEHP_Account_Menu_Enhancer {
         $custom_pos = 300;
         foreach ( $customs as $cid => $ci ) {
             $target = $this->normalize_target_value( isset( $ci['menu'] ) ? $ci['menu'] : 'both' );
-            if ( $target === 'hivepress' ) { continue; } // HP-only: do NOT add to WC
+            if ( $target === 'hivepress' ) { continue; }
             if ( ! $this->user_can_see( $ci ) ) { continue; }
             $url = $this->resolve_custom_url( $ci );
             if ( $url === '' ) { continue; }
@@ -408,7 +502,7 @@ class AMEHP_Account_Menu_Enhancer {
             $custom_pos += 10;
         }
 
-        // Final scrub: ensure HP-only customs never remain
+        // Ensure HP-only customs don’t leak into WC
         foreach ( $customs as $cid => $ci ) {
             $target = $this->normalize_target_value( isset( $ci['menu'] ) ? $ci['menu'] : 'both' );
             if ( $target === 'hivepress' ) {
@@ -574,7 +668,7 @@ class AMEHP_Account_Menu_Enhancer {
                 $params = array( 'vendor_id' => $vendor_id );
             }
 
-            // User profile: ask HP to build pretty URL via 'user' (ID). If not pretty, force /{base}/{username}/
+            // User profile pretty URL handling
             if ( $route === 'user_view_page' ) {
                 $uid = get_current_user_id();
                 if ( ! $uid ) { return ''; }
@@ -612,13 +706,7 @@ class AMEHP_Account_Menu_Enhancer {
         return home_url( '/' . $base . '/' . rawurlencode( $username ) . '/' );
     }
 
-    // Sorting helpers
-    public function cmp_order( $a, $b ) {
-        $oa = isset( $a['order'] ) ? (int) $a['order'] : 999;
-        $ob = isset( $b['order'] ) ? (int) $b['order'] : 999;
-        if ( $oa == $ob ) { return 0; }
-        return ( $oa < $ob ) ? -1 : 1;
-    }
+    // Sorting helper for WC merge
     public function cmp_position( $a, $b ) {
         $pa = isset( $a['position'] ) ? (int) $a['position'] : 999;
         $pb = isset( $b['position'] ) ? (int) $b['position'] : 999;
