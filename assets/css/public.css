@@ -1,0 +1,45 @@
+/* Front-end badge styles for Woo + HP menus */
+
+/* Base positioning for Woo nav links */
+.woocommerce-MyAccount-navigation a { position: relative; }
+
+/* Universal badge look — small circle by default */
+.woocommerce-MyAccount-navigation a small.hp-badge,
+.hp-menu__item a small,
+.hp-menu__item small {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  margin-left: .5rem;
+
+  border-radius: 9999px;
+  background-color: #ff5a5f;
+  color: #fff;
+  font-size: 80%;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* Two+ digits (or 9+) — allow a compact pill so numbers fit */
+.woocommerce-MyAccount-navigation a small.hp-badge[data-len="2"],
+.hp-menu__item a small[data-len="2"],
+.hp-menu__item small[data-len="2"] {
+  width: auto;
+  min-width: 1.25rem;
+  padding: 0 .4rem;
+}
+
+/* Optionally, three+ digits — a slightly wider pill (if it ever happens) */
+.woocommerce-MyAccount-navigation a small.hp-badge[data-len="3"],
+.hp-menu__item a small[data-len="3"],
+.hp-menu__item small[data-len="3"] {
+  width: auto;
+  min-width: 1.25rem;
+  padding: 0 .5rem;
+}
